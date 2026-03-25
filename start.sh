@@ -6,10 +6,16 @@
 WORKSPACE_DIR="${WORKSPACE_DIR:-/workspaces/$(basename "$(pwd)")}"
 cd "$WORKSPACE_DIR"
 
-echo "=== Starting services ($(date '+%H:%M:%S')) ==="
+echo ""
+echo "╔══════════════════════════════════════════╗"
+echo "║       SERVICE STARTUP (postStart)        ║"
+echo "╚══════════════════════════════════════════╝"
+echo "  Time: $(date '+%H:%M:%S')"
+echo "  Dir:  $WORKSPACE_DIR"
+echo ""
 
 if [ ! -f "workspace.json" ]; then
-  echo "ERROR: workspace.json not found"
+  echo "[start] ✗ workspace.json not found"
   exit 1
 fi
 
@@ -23,13 +29,14 @@ for i in $(seq 0 $((REPO_COUNT - 1))); do
 done
 
 # ── Ensure deps exist (self-healing) ──
+echo "[deps] Checking dependencies..."
 for i in $(seq 0 $((REPO_COUNT - 1))); do
   NAME=$(jq -r ".repos[$i].name" workspace.json)
   PKG_MGR=$(jq -r ".repos[$i].packageManager // \"npm\"" workspace.json)
   NODE_OPTS=$(jq -r ".repos[$i].nodeOptions // empty" workspace.json)
 
   if [ -d "$WORKSPACE_DIR/$NAME" ] && [ ! -d "$WORKSPACE_DIR/$NAME/node_modules" ]; then
-    echo "$NAME deps missing — installing..."
+    echo "[deps] ⏳ $NAME missing — installing ($PKG_MGR)..."
     (
       cd "$WORKSPACE_DIR/$NAME"
       if [ "$PKG_MGR" = "yarn" ]; then
@@ -44,14 +51,15 @@ for i in $(seq 0 $((REPO_COUNT - 1))); do
 done
 
 if [ -d "$WORKSPACE_DIR/vibe-ui" ] && [ ! -d "$WORKSPACE_DIR/vibe-ui/node_modules" ]; then
-  echo "vibe-ui deps missing — installing..."
+  echo "[deps] ⏳ vibe-ui missing — installing..."
   (cd "$WORKSPACE_DIR/vibe-ui" && npm install)
 fi
+echo "[deps] ✓ All dependencies ready"
 
 # ── Restore active branch ──
 if [ -f "$WORKSPACE_DIR/.active-branch" ]; then
   BRANCH=$(cat "$WORKSPACE_DIR/.active-branch")
-  echo "Restoring branch: $BRANCH"
+  echo "[branch] Restoring: $BRANCH"
   for i in $(seq 0 $((REPO_COUNT - 1))); do
     NAME=$(jq -r ".repos[$i].name" workspace.json)
     git -C "$WORKSPACE_DIR/$NAME" checkout "$BRANCH" 2>/dev/null || true
@@ -71,6 +79,7 @@ sleep 1
 sudo corepack enable 2>/dev/null || true
 
 # ── Start services from workspace.json ──
+echo "[start] Launching services..."
 for i in $(seq 0 $((REPO_COUNT - 1))); do
   NAME=$(jq -r ".repos[$i].name" workspace.json)
   PORT=$(jq -r ".repos[$i].port // empty" workspace.json)
@@ -78,7 +87,7 @@ for i in $(seq 0 $((REPO_COUNT - 1))); do
   NODE_OPTS=$(jq -r ".repos[$i].nodeOptions // empty" workspace.json)
 
   if [ -z "$DEV" ] || [ ! -d "$WORKSPACE_DIR/$NAME/node_modules" ]; then
-    echo "SKIP: $NAME (no dev command or missing deps)"
+    echo "[start] ⊘ $NAME — skipped (no dev command or missing deps)"
     continue
   fi
 
@@ -87,17 +96,18 @@ for i in $(seq 0 $((REPO_COUNT - 1))); do
 
   LOG="/tmp/${NAME}.log"
   (cd "$WORKSPACE_DIR/$NAME" && eval "${ENV_PREFIX}${DEV}" >> "$LOG" 2>&1) &
-  echo "  $NAME → :$PORT"
+  echo "[start] ▶ $NAME → :$PORT"
 done
 
 # ── Start vibe-ui (always port 4000) ──
 if [ -d "$WORKSPACE_DIR/vibe-ui/node_modules" ]; then
   (cd "$WORKSPACE_DIR/vibe-ui" && WORKSPACE_DIR="$WORKSPACE_DIR" ANTHROPIC_API_KEY=$(cat .env 2>/dev/null | grep ANTHROPIC | cut -d= -f2) node server-washmen.js >> /tmp/vibe.log 2>&1) &
-  echo "  vibe-ui → :4000"
+  echo "[start] ▶ vibe-ui → :4000"
 fi
 
 # ── Health check: wait for all ports ──
-echo "Waiting for services..."
+echo ""
+echo "[health] Waiting for services to be ready..."
 TIMEOUT=90
 ELAPSED=0
 while [ $ELAPSED -lt $TIMEOUT ]; do
@@ -113,16 +123,15 @@ while [ $ELAPSED -lt $TIMEOUT ]; do
   fi
   sleep 3
   ELAPSED=$((ELAPSED + 3))
+  echo "[health] ... ${ELAPSED}s elapsed"
 done
 
-# ── Report health ──
 echo ""
-echo "=== Service Status ==="
 for PORT in $ALL_PORTS; do
   if lsof -ti:$PORT -sTCP:LISTEN > /dev/null 2>&1; then
-    echo "  :$PORT ✓"
+    echo "[health] :$PORT ✓ up"
   else
-    echo "  :$PORT ✗ (not listening)"
+    echo "[health] :$PORT ✗ NOT LISTENING"
   fi
 done
 
@@ -133,20 +142,25 @@ if [ "$CODESPACES" = "true" ] && command -v gh &>/dev/null; then
     PORT_ARGS="$PORT_ARGS $PORT:public"
   done
   if [ -n "$PORT_ARGS" ]; then
-    # Use saved GITHUB_TOKEN from postCreateCommand (persists across restarts)
-    SAVED_TOKEN=""
-    [ -f "$HOME/.gh-token" ] && SAVED_TOKEN=$(cat "$HOME/.gh-token")
-    if [ -n "$GITHUB_TOKEN" ]; then
-      GH_TOKEN="$GITHUB_TOKEN" gh codespace ports visibility $PORT_ARGS 2>/dev/null && echo "Ports set to public" || echo "WARN: Could not set ports public"
-    elif [ -n "$SAVED_TOKEN" ]; then
-      GH_TOKEN="$SAVED_TOKEN" gh codespace ports visibility $PORT_ARGS 2>/dev/null && echo "Ports set to public (saved token)" || echo "WARN: Could not set ports public"
+    TOKEN="${GITHUB_TOKEN:-}"
+    [ -z "$TOKEN" ] && [ -f "$HOME/.gh-token" ] && TOKEN=$(cat "$HOME/.gh-token")
+    CS_NAME="${CODESPACE_NAME:-}"
+    [ -z "$CS_NAME" ] && [ -f "$HOME/.codespace-name" ] && CS_NAME=$(cat "$HOME/.codespace-name")
+
+    echo "[ports] Setting public:$PORT_ARGS"
+    if [ -n "$TOKEN" ] && [ -n "$CS_NAME" ]; then
+      GH_TOKEN="$TOKEN" gh codespace ports visibility $PORT_ARGS -c "$CS_NAME" 2>/dev/null && echo "[ports] ✓ Ports set to public" || echo "[ports] ✗ Could not set ports public"
     else
-      echo "WARN: No GitHub token available. Set ports public from VS Code Ports tab."
+      echo "[ports] ✗ No token ($([ -f $HOME/.gh-token ] && echo 'file exists' || echo 'no file')) or codespace name ($([ -f $HOME/.codespace-name ] && echo 'file exists' || echo 'no file'))"
     fi
   fi
 fi
 
-echo "=== Ready ($(date '+%H:%M:%S')) ==="
+echo ""
+echo "╔══════════════════════════════════════════╗"
+echo "║       READY — $(date '+%H:%M:%S')                       ║"
+echo "╚══════════════════════════════════════════╝"
+echo ""
 
 # Keep alive so background processes aren't reaped
 wait

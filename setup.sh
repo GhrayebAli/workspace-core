@@ -7,14 +7,29 @@ set -e
 WORKSPACE_DIR="${WORKSPACE_DIR:-/workspaces/$(basename "$(pwd)")}"
 cd "$WORKSPACE_DIR"
 
-echo "=== Workspace Setup ==="
+START_TIME=$(date +%s)
+echo ""
+echo "╔══════════════════════════════════════════╗"
+echo "║       WORKSPACE SETUP (postCreate)       ║"
+echo "╚══════════════════════════════════════════╝"
+echo "  Time: $(date '+%H:%M:%S')"
+echo "  Dir:  $WORKSPACE_DIR"
+echo ""
 
-# ── Persist GITHUB_TOKEN for postStartCommand (port visibility) ──
+# ── Persist GITHUB_TOKEN and CODESPACE_NAME for postStartCommand (port visibility) ──
 if [ -n "$GITHUB_TOKEN" ]; then
   echo "$GITHUB_TOKEN" > "$HOME/.gh-token"
   chmod 600 "$HOME/.gh-token"
+  echo "[setup] ✓ GITHUB_TOKEN saved"
+else
+  echo "[setup] ✗ GITHUB_TOKEN not available — port visibility won't auto-set"
 fi
-START_TIME=$(date +%s)
+if [ -n "$CODESPACE_NAME" ]; then
+  echo "$CODESPACE_NAME" > "$HOME/.codespace-name"
+  echo "[setup] ✓ CODESPACE_NAME saved: $CODESPACE_NAME"
+else
+  echo "[setup] ✗ CODESPACE_NAME not available"
+fi
 
 # ── Parse workspace.json ──
 if [ ! -f "workspace.json" ]; then
@@ -155,4 +170,8 @@ if [ "$CODESPACES" = "true" ] && [ -n "$CODESPACE_NAME" ]; then
   fi
 fi
 
-echo "=== Setup complete ($(( $(date +%s) - START_TIME ))s) ==="
+echo ""
+echo "╔══════════════════════════════════════════╗"
+echo "║       SETUP COMPLETE — $(( $(date +%s) - START_TIME ))s              ║"
+echo "╚══════════════════════════════════════════╝"
+echo ""
