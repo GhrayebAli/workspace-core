@@ -132,12 +132,17 @@ if [ "$CODESPACES" = "true" ] && command -v gh &>/dev/null; then
   for PORT in $(jq -r '.portsAttributes | to_entries[] | select(.value.visibility == "public") | .key' .devcontainer/devcontainer.json 2>/dev/null); do
     PORT_ARGS="$PORT_ARGS $PORT:public"
   done
-  # CODESPACE_NAME is set during devcontainer lifecycle but may be empty in SSH
-  if [ -n "$CODESPACE_NAME" ]; then
-    gh codespace ports visibility $PORT_ARGS -c "$CODESPACE_NAME" 2>/dev/null && echo "Ports set to public" || echo "WARN: Could not set ports public (run: gh codespace ports visibility $PORT_ARGS)"
-  else
-    # Try without -c flag (may work with GITHUB_TOKEN)
-    gh codespace ports visibility $PORT_ARGS 2>/dev/null && echo "Ports set to public" || echo "WARN: Set ports public manually: gh codespace ports visibility $PORT_ARGS"
+  if [ -n "$PORT_ARGS" ]; then
+    # Use saved GITHUB_TOKEN from postCreateCommand (persists across restarts)
+    SAVED_TOKEN=""
+    [ -f "$HOME/.gh-token" ] && SAVED_TOKEN=$(cat "$HOME/.gh-token")
+    if [ -n "$GITHUB_TOKEN" ]; then
+      GH_TOKEN="$GITHUB_TOKEN" gh codespace ports visibility $PORT_ARGS 2>/dev/null && echo "Ports set to public" || echo "WARN: Could not set ports public"
+    elif [ -n "$SAVED_TOKEN" ]; then
+      GH_TOKEN="$SAVED_TOKEN" gh codespace ports visibility $PORT_ARGS 2>/dev/null && echo "Ports set to public (saved token)" || echo "WARN: Could not set ports public"
+    else
+      echo "WARN: No GitHub token available. Set ports public from VS Code Ports tab."
+    fi
   fi
 fi
 

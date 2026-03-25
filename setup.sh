@@ -8,6 +8,12 @@ WORKSPACE_DIR="${WORKSPACE_DIR:-/workspaces/$(basename "$(pwd)")}"
 cd "$WORKSPACE_DIR"
 
 echo "=== Workspace Setup ==="
+
+# ── Persist GITHUB_TOKEN for postStartCommand (port visibility) ──
+if [ -n "$GITHUB_TOKEN" ]; then
+  echo "$GITHUB_TOKEN" > "$HOME/.gh-token"
+  chmod 600 "$HOME/.gh-token"
+fi
 START_TIME=$(date +%s)
 
 # ── Parse workspace.json ──
