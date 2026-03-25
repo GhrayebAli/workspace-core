@@ -92,7 +92,7 @@ done
 
 # ── Start vibe-ui (always port 4000) ──
 if [ -d "$WORKSPACE_DIR/vibe-ui/node_modules" ]; then
-  (cd "$WORKSPACE_DIR/vibe-ui" && ANTHROPIC_API_KEY=$(cat .env 2>/dev/null | grep ANTHROPIC | cut -d= -f2) node server-washmen.js >> /tmp/vibe.log 2>&1) &
+  (cd "$WORKSPACE_DIR/vibe-ui" && WORKSPACE_DIR="$WORKSPACE_DIR" ANTHROPIC_API_KEY=$(cat .env 2>/dev/null | grep ANTHROPIC | cut -d= -f2) node server-washmen.js >> /tmp/vibe.log 2>&1) &
   echo "  vibe-ui → :4000"
 fi
 
