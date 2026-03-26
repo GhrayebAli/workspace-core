@@ -66,6 +66,47 @@ if [ -f "$WORKSPACE_DIR/.active-branch" ]; then
   done
 fi
 
+# ── Regenerate .env files if missing (setup.sh creates them, but git checkout can wipe them) ──
+if [ -f "workspace.json" ] && jq -e '.envFiles' workspace.json > /dev/null 2>&1; then
+  for NAME in $(jq -r '.envFiles // {} | keys[]' workspace.json 2>/dev/null); do
+    if [ ! -d "$WORKSPACE_DIR/$NAME" ]; then continue; fi
+    for ENV_FILE in $(jq -r ".envFiles[\"$NAME\"] | keys[]" workspace.json 2>/dev/null); do
+      if [ ! -f "$WORKSPACE_DIR/$NAME/$ENV_FILE" ]; then
+        CONTENT=$(jq -r ".envFiles[\"$NAME\"][\"$ENV_FILE\"]" workspace.json)
+        echo -e "$CONTENT" > "$WORKSPACE_DIR/$NAME/$ENV_FILE"
+        echo "[env] Regenerated $NAME/$ENV_FILE"
+      fi
+    done
+  done
+  # Patch frontend API URL for Codespace forwarded port
+  if [ "$CODESPACES" = "true" ]; then
+    CS_NAME="${CODESPACE_NAME:-}"
+    [ -z "$CS_NAME" ] && [ -f "$HOME/.codespace-name" ] && CS_NAME=$(cat "$HOME/.codespace-name")
+    if [ -n "$CS_NAME" ]; then
+      for i in $(seq 0 $((REPO_COUNT - 1))); do
+        TYPE=$(jq -r ".repos[$i].type // empty" workspace.json)
+        NAME=$(jq -r ".repos[$i].name" workspace.json)
+        if [ "$TYPE" = "frontend" ]; then
+          # Find the API gateway port
+          for j in $(seq 0 $((REPO_COUNT - 1))); do
+            JTYPE=$(jq -r ".repos[$j].type // empty" workspace.json)
+            JPORT=$(jq -r ".repos[$j].port // empty" workspace.json)
+            if [ "$JTYPE" = "backend" ] && [ -n "$JPORT" ]; then
+              API_URL="https://${CS_NAME}-${JPORT}.app.github.dev"
+              DEV_ENV="$WORKSPACE_DIR/$NAME/.env.development"
+              if [ -f "$DEV_ENV" ] && grep -q "REACT_APP_INTERNAL_API_OPS" "$DEV_ENV"; then
+                sed -i "s|REACT_APP_INTERNAL_API_OPS=.*|REACT_APP_INTERNAL_API_OPS=${API_URL}/|" "$DEV_ENV"
+                echo "[env] Patched $NAME API URL → $API_URL"
+              fi
+              break
+            fi
+          done
+        fi
+      done
+    fi
+  fi
+fi
+
 # ── Clear old logs ──
 for f in /tmp/*.log; do > "$f" 2>/dev/null; done
 
