@@ -167,7 +167,10 @@ done
 
 # ── Start vibe-ui (always port 4000) ──
 if [ -d "$WORKSPACE_DIR/vibe-ui/node_modules" ]; then
-  (cd "$WORKSPACE_DIR/vibe-ui" && WORKSPACE_DIR="$WORKSPACE_DIR" ANTHROPIC_API_KEY=$(cat .env 2>/dev/null | grep ANTHROPIC | cut -d= -f2) node server-washmen.js >> /tmp/vibe.log 2>&1) &
+  # Store vibe-ui data under /workspaces/ so it survives codespace rebuilds
+  VIBE_DATA="$WORKSPACE_DIR/.vibe-data"
+  mkdir -p "$VIBE_DATA"
+  (cd "$WORKSPACE_DIR/vibe-ui" && CLAUDECK_HOME="$VIBE_DATA" WORKSPACE_DIR="$WORKSPACE_DIR" ANTHROPIC_API_KEY=$(cat .env 2>/dev/null | grep ANTHROPIC | cut -d= -f2) node server-washmen.js >> /tmp/vibe.log 2>&1) &
   echo "[start] ▶ vibe-ui → :4000"
 fi
 
