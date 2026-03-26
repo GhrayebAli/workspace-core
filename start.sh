@@ -78,6 +78,16 @@ sleep 1
 # ── Enable corepack for yarn-based repos ──
 sudo corepack enable 2>/dev/null || true
 
+# ── Clear frontend webpack cache (env vars are baked at compile time) ──
+for i in $(seq 0 $((REPO_COUNT - 1))); do
+  TYPE=$(jq -r ".repos[$i].type // empty" workspace.json)
+  NAME=$(jq -r ".repos[$i].name" workspace.json)
+  if [ "$TYPE" = "frontend" ] && [ -d "$WORKSPACE_DIR/$NAME/node_modules/.cache" ]; then
+    rm -rf "$WORKSPACE_DIR/$NAME/node_modules/.cache"
+    echo "[cache] Cleared webpack cache for $NAME"
+  fi
+done
+
 # ── Start services from workspace.json ──
 echo "[start] Launching services..."
 for i in $(seq 0 $((REPO_COUNT - 1))); do
