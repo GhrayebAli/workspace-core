@@ -107,21 +107,6 @@ if [ -f "workspace.json" ] && jq -e '.envFiles' workspace.json > /dev/null 2>&1;
   fi
 fi
 
-# ── Patch backend CORS for Codespace cross-origin requests ──
-# Sails.js reads CORS from config/env/development.js, not .env
-# Browser sends baggage/sentry-trace (Sentry), x-vibe-token (vibe-ui) headers
-for i in $(seq 0 $((REPO_COUNT - 1))); do
-  TYPE=$(jq -r ".repos[$i].type // empty" workspace.json)
-  NAME=$(jq -r ".repos[$i].name" workspace.json)
-  CORS_FILE="$WORKSPACE_DIR/$NAME/config/env/development.js"
-  if [ "$TYPE" = "backend" ] && [ -f "$CORS_FILE" ]; then
-    if ! grep -q "baggage" "$CORS_FILE" 2>/dev/null; then
-      sed -i "s|cors: {|cors: {\n      allRoutes: true,\n      allowOrigins: '*',\n      allowRequestHeaders: 'content-type, Authorization, manager-password, user-timestamp, auth, refresh, x-vibe-token, baggage, sentry-trace',|" "$CORS_FILE"
-      echo "[cors] Patched $NAME CORS config"
-    fi
-  fi
-done
-
 # ── Clear old logs ──
 for f in /tmp/*.log; do > "$f" 2>/dev/null; done
 
