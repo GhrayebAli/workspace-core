@@ -187,7 +187,7 @@ done
 
 # ── Patch frontend API URL for Codespace forwarded port ──
 if [ "$CODESPACES" = "true" ] && [ -n "$CODESPACE_NAME" ]; then
-  API_URL="https://${CODESPACE_NAME}-1339.app.github.dev"
+  API_URL="https://${CODESPACE_NAME}-1345.app.github.dev"
   FRONTEND_ENV="$WORKSPACE_DIR/ops-frontend/.env.development"
   if [ -f "$FRONTEND_ENV" ]; then
     sed -i "s|REACT_APP_INTERNAL_API_OPS=.*|REACT_APP_INTERNAL_API_OPS=${API_URL}/|" "$FRONTEND_ENV"
