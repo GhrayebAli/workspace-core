@@ -1,6 +1,6 @@
 #!/bin/bash
 # Generic workspace setup — reads everything from workspace.json
-# This script is identical across all workspaces.
+# Supports both multi-repo and monorepo workspaces.
 
 set -e
 
@@ -65,6 +65,7 @@ REPO_COUNT=$(jq '.repos | length' workspace.json)
 for i in $(seq 0 $((REPO_COUNT - 1))); do
   NAME=$(jq -r ".repos[$i].name" workspace.json)
   URL=$(jq -r ".repos[$i].url // empty" workspace.json)
+  BRANCH=$(jq -r ".repos[$i].branch // empty" workspace.json)
   CHECK_DIR=$(jq -r ".repos[$i].checkDir // \"package.json\"" workspace.json)
 
   if [ -z "$URL" ]; then
@@ -80,8 +81,6 @@ for i in $(seq 0 $((REPO_COUNT - 1))); do
 
   # Private repos need token
   if echo "$URL" | grep -q "github.com" && [ -z "$GIT_TOKEN" ]; then
-    # Check if repo is under a private org
-    ORG=$(echo "$URL" | sed 's|.*/\([^/]*\)/.*|\1|')
     IS_PRIVATE=$(jq -r ".repos[$i].isPrivate // false" workspace.json)
     if [ "$IS_PRIVATE" = "true" ]; then
       echo "Skipping $NAME — no git token for private repo"
@@ -90,14 +89,18 @@ for i in $(seq 0 $((REPO_COUNT - 1))); do
   fi
 
   rm -rf "$NAME"
-  git clone "$URL" "$NAME" --depth 1
-  echo "Cloned $NAME ($(( $(date +%s) - START_TIME ))s)"
+  CLONE_ARGS="--depth 1"
+  [ -n "$BRANCH" ] && CLONE_ARGS="--branch $BRANCH $CLONE_ARGS"
+  git clone "$URL" "$NAME" $CLONE_ARGS
+  echo "Cloned $NAME${BRANCH:+ @ $BRANCH} ($(( $(date +%s) - START_TIME ))s)"
 done
 
 # Clone vibe-ui (always from GhrayebAli, public)
 [ -f "vibe-ui/server-washmen.js" ] || (rm -rf vibe-ui && git clone https://github.com/GhrayebAli/vibe-ui.git vibe-ui && echo "Cloned vibe-ui")
 
 # ── Install dependencies (skip if already installed) ──
+export COREPACK_ENABLE_AUTO_PIN=0
+export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 
 for i in $(seq 0 $((REPO_COUNT - 1))); do
   NAME=$(jq -r ".repos[$i].name" workspace.json)
@@ -138,8 +141,34 @@ if [ -n "$ANTHROPIC_API_KEY" ]; then
   echo "API key written to vibe-ui/.env"
 fi
 
-# ── Resolve backend .env files from .env.example via AWS Secrets Manager ──
+# ── Resolve per-repo envFiles (facility pattern: repos[i].envFiles) ──
 RESOLVE_SCRIPT="$WORKSPACE_DIR/core/resolve-secrets.sh"
+
+for i in $(seq 0 $((REPO_COUNT - 1))); do
+  NAME=$(jq -r ".repos[$i].name" workspace.json)
+  REPO_DIR="$WORKSPACE_DIR/$NAME"
+  [ ! -d "$REPO_DIR" ] && continue
+
+  for ENV_EXAMPLE in $(jq -r ".repos[$i].envFiles // {} | keys[]" workspace.json 2>/dev/null); do
+    OUTPUT_NAME=$(jq -r ".repos[$i].envFiles[\"$ENV_EXAMPLE\"]" workspace.json)
+    INPUT_PATH="$REPO_DIR/$ENV_EXAMPLE"
+    OUTPUT_PATH="$REPO_DIR/$OUTPUT_NAME"
+
+    if [ ! -f "$INPUT_PATH" ]; then
+      echo "WARN: $NAME/$ENV_EXAMPLE not found — skipping"
+      continue
+    fi
+
+    if grep -q "arn:aws:secretsmanager:" "$INPUT_PATH" 2>/dev/null && [ -f "$RESOLVE_SCRIPT" ]; then
+      bash "$RESOLVE_SCRIPT" "$INPUT_PATH" "$OUTPUT_PATH"
+    else
+      cp "$INPUT_PATH" "$OUTPUT_PATH"
+      echo "[setup] Copied $NAME/$ENV_EXAMPLE -> $(basename "$OUTPUT_NAME") (no secrets)"
+    fi
+  done
+done
+
+# ── Resolve top-level repoEnvFiles (ops pattern: repoEnvFiles at workspace root) ──
 if jq -e '.repoEnvFiles' workspace.json > /dev/null 2>&1 && [ -f "$RESOLVE_SCRIPT" ]; then
   echo ""
   echo "Resolving backend secrets from AWS Secrets Manager..."
@@ -164,34 +193,44 @@ if jq -e '.repoEnvFiles' workspace.json > /dev/null 2>&1 && [ -f "$RESOLVE_SCRIP
   done
 fi
 
-# ── Write frontend .env files from workspace.json inline content via envsubst ──
-ENVSUBST_VARS=""
-for var in GOOGLE_MAPS_KEY ALGOLIA_API_KEY SENTRY_DSN E2E_CLIENT_SECRET MUIX_LICENSE_KEY; do
-  if [ -n "${!var}" ]; then
-    ENVSUBST_VARS="$ENVSUBST_VARS \$$var"
-  fi
-done
-
-for NAME in $(jq -r '.envFiles // {} | keys[]' workspace.json 2>/dev/null); do
-  if [ ! -d "$WORKSPACE_DIR/$NAME" ]; then continue; fi
-  for ENV_FILE in $(jq -r ".envFiles[\"$NAME\"] | keys[]" workspace.json 2>/dev/null); do
-    CONTENT=$(jq -r ".envFiles[\"$NAME\"][\"$ENV_FILE\"]" workspace.json)
-    if [ -n "$ENVSUBST_VARS" ]; then
-      echo -e "$CONTENT" | envsubst "$ENVSUBST_VARS" > "$WORKSPACE_DIR/$NAME/$ENV_FILE"
-    else
-      echo -e "$CONTENT" > "$WORKSPACE_DIR/$NAME/$ENV_FILE"
+# ── Write inline .env files via envsubst (ops pattern: envFiles with string content) ──
+if jq -e '.envFiles' workspace.json > /dev/null 2>&1; then
+  ENVSUBST_VARS=""
+  for var in GOOGLE_MAPS_KEY ALGOLIA_API_KEY SENTRY_DSN E2E_CLIENT_SECRET MUIX_LICENSE_KEY; do
+    if [ -n "${!var}" ]; then
+      ENVSUBST_VARS="$ENVSUBST_VARS \$$var"
     fi
-    echo "Created $NAME/$ENV_FILE"
   done
-done
+
+  for NAME in $(jq -r '.envFiles // {} | keys[]' workspace.json 2>/dev/null); do
+    if [ ! -d "$WORKSPACE_DIR/$NAME" ]; then continue; fi
+    for ENV_FILE in $(jq -r ".envFiles[\"$NAME\"] | keys[]" workspace.json 2>/dev/null); do
+      CONTENT=$(jq -r ".envFiles[\"$NAME\"][\"$ENV_FILE\"]" workspace.json)
+      if [ -n "$ENVSUBST_VARS" ]; then
+        echo -e "$CONTENT" | envsubst "$ENVSUBST_VARS" > "$WORKSPACE_DIR/$NAME/$ENV_FILE"
+      else
+        echo -e "$CONTENT" > "$WORKSPACE_DIR/$NAME/$ENV_FILE"
+      fi
+      echo "Created $NAME/$ENV_FILE"
+    done
+  done
+fi
 
 # ── Patch frontend API URL for Codespace forwarded port ──
 if [ "$CODESPACES" = "true" ] && [ -n "$CODESPACE_NAME" ]; then
-  API_URL="https://${CODESPACE_NAME}-1345.app.github.dev"
-  FRONTEND_ENV="$WORKSPACE_DIR/ops-frontend/.env.development"
-  if [ -f "$FRONTEND_ENV" ]; then
-    sed -i "s|REACT_APP_INTERNAL_API_OPS=.*|REACT_APP_INTERNAL_API_OPS=${API_URL}/|" "$FRONTEND_ENV"
-    echo "Patched REACT_APP_INTERNAL_API_OPS=${API_URL}/"
+  PATCH_REPO=$(jq -r '.frontendApiPatching.repo // empty' workspace.json)
+  PATCH_FILE=$(jq -r '.frontendApiPatching.file // empty' workspace.json)
+  PATCH_VAR=$(jq -r '.frontendApiPatching.envVar // empty' workspace.json)
+  PATCH_PORT=$(jq -r '.frontendApiPatching.apiPort // empty' workspace.json)
+  PATCH_SUFFIX=$(jq -r '.frontendApiPatching.suffix // "/"' workspace.json)
+
+  if [ -n "$PATCH_REPO" ] && [ -n "$PATCH_VAR" ] && [ -n "$PATCH_PORT" ]; then
+    API_URL="https://${CODESPACE_NAME}-${PATCH_PORT}.app.github.dev${PATCH_SUFFIX}"
+    TARGET_FILE="$WORKSPACE_DIR/$PATCH_REPO/$PATCH_FILE"
+    if [ -f "$TARGET_FILE" ]; then
+      sed -i "s|${PATCH_VAR}=.*|${PATCH_VAR}=${API_URL}|" "$TARGET_FILE"
+      echo "Patched ${PATCH_VAR}=${API_URL}"
+    fi
   fi
 fi
 
