@@ -67,6 +67,30 @@ if [ -f "$WORKSPACE_DIR/.active-branch" ]; then
 fi
 
 # ── Regenerate .env files if missing (setup.sh creates them, but git checkout can wipe them) ──
+
+# Backend: re-resolve from .env.example via AWS Secrets Manager
+RESOLVE_SCRIPT="$WORKSPACE_DIR/core/resolve-secrets.sh"
+if jq -e '.repoEnvFiles' workspace.json > /dev/null 2>&1 && [ -f "$RESOLVE_SCRIPT" ]; then
+  for NAME in $(jq -r '.repoEnvFiles // {} | keys[]' workspace.json 2>/dev/null); do
+    REPO_DIR="$WORKSPACE_DIR/$NAME"
+    if [ ! -d "$REPO_DIR" ]; then continue; fi
+    for ENV_EXAMPLE in $(jq -r ".repoEnvFiles[\"$NAME\"] | keys[]" workspace.json 2>/dev/null); do
+      OUTPUT_NAME=$(jq -r ".repoEnvFiles[\"$NAME\"][\"$ENV_EXAMPLE\"]" workspace.json)
+      OUTPUT_PATH="$REPO_DIR/$OUTPUT_NAME"
+      INPUT_PATH="$REPO_DIR/$ENV_EXAMPLE"
+      if [ ! -f "$OUTPUT_PATH" ] && [ -f "$INPUT_PATH" ]; then
+        echo "[env] Re-resolving $NAME/$OUTPUT_NAME (missing)..."
+        if grep -q "arn:aws:secretsmanager:" "$INPUT_PATH" 2>/dev/null; then
+          bash "$RESOLVE_SCRIPT" "$INPUT_PATH" "$OUTPUT_PATH"
+        else
+          cp "$INPUT_PATH" "$OUTPUT_PATH"
+        fi
+      fi
+    done
+  done
+fi
+
+# Frontend: re-resolve from inline content via envsubst
 if [ -f "workspace.json" ] && jq -e '.envFiles' workspace.json > /dev/null 2>&1; then
   for NAME in $(jq -r '.envFiles // {} | keys[]' workspace.json 2>/dev/null); do
     if [ ! -d "$WORKSPACE_DIR/$NAME" ]; then continue; fi

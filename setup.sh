@@ -131,22 +131,47 @@ if [ ! -d "$WORKSPACE_DIR/vibe-ui/node_modules" ]; then
   echo "vibe-ui installed ($(( $(date +%s) - START_TIME ))s)"
 fi
 
-# ── Create .env files from workspace.json ──
+# ── Create .env files ──
 
 if [ -n "$ANTHROPIC_API_KEY" ]; then
   echo "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY" > "$WORKSPACE_DIR/vibe-ui/.env"
   echo "API key written to vibe-ui/.env"
 fi
 
-# Build envsubst variable list from Codespace secrets that are actually set
+# ── Resolve backend .env files from .env.example via AWS Secrets Manager ──
+RESOLVE_SCRIPT="$WORKSPACE_DIR/core/resolve-secrets.sh"
+if jq -e '.repoEnvFiles' workspace.json > /dev/null 2>&1 && [ -f "$RESOLVE_SCRIPT" ]; then
+  echo ""
+  echo "Resolving backend secrets from AWS Secrets Manager..."
+  for NAME in $(jq -r '.repoEnvFiles // {} | keys[]' workspace.json 2>/dev/null); do
+    REPO_DIR="$WORKSPACE_DIR/$NAME"
+    if [ ! -d "$REPO_DIR" ]; then continue; fi
+    for ENV_EXAMPLE in $(jq -r ".repoEnvFiles[\"$NAME\"] | keys[]" workspace.json 2>/dev/null); do
+      OUTPUT_NAME=$(jq -r ".repoEnvFiles[\"$NAME\"][\"$ENV_EXAMPLE\"]" workspace.json)
+      INPUT_PATH="$REPO_DIR/$ENV_EXAMPLE"
+      OUTPUT_PATH="$REPO_DIR/$OUTPUT_NAME"
+      if [ ! -f "$INPUT_PATH" ]; then
+        echo "WARN: $NAME/$ENV_EXAMPLE not found — skipping"
+        continue
+      fi
+      if grep -q "arn:aws:secretsmanager:" "$INPUT_PATH" 2>/dev/null; then
+        bash "$RESOLVE_SCRIPT" "$INPUT_PATH" "$OUTPUT_PATH"
+      else
+        cp "$INPUT_PATH" "$OUTPUT_PATH"
+        echo "[setup] Copied $NAME/$ENV_EXAMPLE -> $OUTPUT_NAME (no secrets)"
+      fi
+    done
+  done
+fi
+
+# ── Write frontend .env files from workspace.json inline content via envsubst ──
 ENVSUBST_VARS=""
-for var in GOOGLE_MAPS_KEY ALGOLIA_APP_ID ALGOLIA_API_KEY SENTRY_DSN E2E_CLIENT_ID E2E_CLIENT_SECRET ANTHROPIC_API_KEY WASHMEN_GITHUB_TOKEN VPN_PRIVATE_KEY VIEWS_PGPASSWORD REDSHIFT_WAREHOUSE_DB_PASSWORD INTERNAL_USER_AUTH_SALT GOOGLE_PLACES_API_KEY INTERCOM_ACCESS_TOKEN AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
+for var in GOOGLE_MAPS_KEY ALGOLIA_API_KEY SENTRY_DSN E2E_CLIENT_SECRET MUIX_LICENSE_KEY; do
   if [ -n "${!var}" ]; then
     ENVSUBST_VARS="$ENVSUBST_VARS \$$var"
   fi
 done
 
-# Write env files defined in workspace.json
 for NAME in $(jq -r '.envFiles // {} | keys[]' workspace.json 2>/dev/null); do
   if [ ! -d "$WORKSPACE_DIR/$NAME" ]; then continue; fi
   for ENV_FILE in $(jq -r ".envFiles[\"$NAME\"] | keys[]" workspace.json 2>/dev/null); do
